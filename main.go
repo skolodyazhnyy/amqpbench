@@ -5,15 +5,27 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/skolodyazhnyy/amqp-cgi-bridge/log"
 	"github.com/streadway/amqp"
 	"golang.org/x/sync/errgroup"
 	"io/ioutil"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"time"
 )
+
+var percentiles = []float32{
+	0.5,
+	0.66,
+	0.75,
+	0.8,
+	0.9,
+	0.95,
+	0.98,
+	0.99,
+	1,
+}
 
 type Message struct {
 	Exchange   string
@@ -36,7 +48,7 @@ func interrupter(cancel func(os.Signal)) {
 	cancel(n)
 }
 
-func worker(ctx context.Context, logger *log.Logger, conn *amqp.Connection, in <-chan Message, out chan<- Stat) error {
+func worker(ctx context.Context, conn *amqp.Connection, in <-chan Message, out chan<- Stat) error {
 	ch, err := conn.Channel()
 	if err != nil {
 		return err
@@ -59,8 +71,15 @@ func worker(ctx context.Context, logger *log.Logger, conn *amqp.Connection, in <
 
 			d := time.Since(start)
 
+			// check if we are existing before reporting errors
+			select {
+			case <-ctx.Done():
+				return nil
+			default:
+			}
+
 			if err != nil {
-				logger.Errorf("Message publishing failed: %v", err)
+				fmt.Printf("ERROR: Message publishing failed: %v\n", err)
 			}
 
 			select {
@@ -81,7 +100,6 @@ func worker(ctx context.Context, logger *log.Logger, conn *amqp.Connection, in <
 func main() {
 	var config struct {
 		AMQPURL     string
-		LogFormat   string
 		Concurrency int
 		Messages    int
 		Size        int
@@ -92,7 +110,6 @@ func main() {
 	}
 
 	flag.StringVar(&config.AMQPURL, "amqp-url", "amqp://", "AMQP URL (see https://www.rabbitmq.com/uri-spec.html)")
-	flag.StringVar(&config.LogFormat, "log-fmt", "text", "Log format: text or json")
 	flag.IntVar(&config.Concurrency, "c", 100, "Number of concurrent publishers")
 	flag.IntVar(&config.Messages, "n", 1000, "Total number of messages to publish")
 	flag.IntVar(&config.Size, "size", 1024, "Message size (bytes)")
@@ -102,15 +119,13 @@ func main() {
 	flag.StringVar(&config.Stats, "stats", "stats.csv", "File path to save all stats")
 	flag.Parse()
 
-	logger := log.NewX(config.LogFormat, os.Stderr, log.DefaultTextFormat)
-
 	var statsw = ioutil.Discard
 
 	// open stats writer
 	if config.Stats != "" {
 		f, err := os.Create(config.Stats)
 		if err != nil {
-			logger.Fatal(err)
+			panic(err)
 		}
 
 		defer f.Close()
@@ -120,29 +135,25 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	logger.Infof("Connecting to AMQP server...")
-
 	// connect to AMQP server
 	conn, err := amqp.Dial(config.AMQPURL)
 	if err != nil {
-		logger.Fatal(err)
+		panic(err)
 	}
-
-	logger.Infof("Connection to AMQP server established")
 
 	defer conn.Close()
 
 	// setup sigint handler
 	go interrupter(func(s os.Signal) {
-		logger.Infof("Signal %v is received, stopping...", s)
-		conn.Close()
+		fmt.Printf("Signal %v is received, stopping...\n", s)
 		cancel()
+		conn.Close()
 	})
 
 	// publisher
 	messages := make(chan Message)
 	go func() {
-		logger.Infof("Starting sending messages...")
+		fmt.Printf("Sending messages (be patient)...\n")
 
 		defer close(messages)
 
@@ -167,27 +178,44 @@ func main() {
 	stats := make(chan Stat)
 	eg, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < config.Concurrency; i++ {
-		i := i
-
 		eg.Go(func() error {
-			return worker(ctx, logger.With(log.R{"worker": i}), conn, messages, stats)
+			return worker(ctx, conn, messages, stats)
 		})
 	}
 
 	// stats
 	go func() {
-		n := 0
-		total := time.Duration(0)
-		max := time.Duration(0)
-		min := time.Duration(0)
 		start := time.Now()
+		times := make([]time.Duration, 0, config.Messages)
+
+		var n, e int
+		var min, max, avg, total time.Duration
 
 		defer func() {
-			logger.Infof("Messages sent: %v", n)
-			logger.Infof("Max publish time: %v", max)
-			logger.Infof("Min publish time: %v", min)
-			logger.Infof("Avg publish time: %v", total/time.Duration(n))
-			logger.Infof("Total duration: %v", time.Since(start))
+			if n != 0 {
+				avg = total / time.Duration(n)
+			}
+
+			duration := time.Since(start)
+
+			sort.Slice(times, func(i, j int) bool {
+				return times[i] < times[j]
+			})
+
+			fmt.Println()
+			fmt.Printf("Concurrent level:\t%v\n", config.Concurrency)
+			fmt.Printf("Time taken for tests:\t%v\n", duration)
+			fmt.Printf("Complete messages:\t%v\n", n)
+			fmt.Printf("Failed messages:\t%v\n", e)
+			fmt.Printf("Messages per second:\t%.2f (mean)\n", 1/avg.Seconds())
+			fmt.Printf("Time per message:\t%v (mean)\n", avg)
+			fmt.Printf("Time per message:\t%v (mean, across all concurrent publishers)\n", duration/time.Duration(n))
+
+			fmt.Println()
+			fmt.Println("Percentage of the messages published within a certain time (ms)")
+			for _, p := range percentiles {
+				fmt.Printf("    %d%% \t%v\n", int(p*100), times[int(float32(len(times)-1)*p)])
+			}
 		}()
 
 		for {
@@ -197,16 +225,22 @@ func main() {
 					return
 				}
 
-				n++
+				if s.Error == nil {
+					n++
 
-				total += s.Duration
+					total += s.Duration
 
-				if s.Duration > max {
-					max = s.Duration
-				}
+					if s.Duration > max {
+						max = s.Duration
+					}
 
-				if s.Duration < min || min == 0 {
-					min = s.Duration
+					if s.Duration < min || min == 0 {
+						min = s.Duration
+					}
+
+					times = append(times, s.Duration)
+				} else {
+					e++
 				}
 
 				errstr := ""
@@ -227,7 +261,7 @@ func main() {
 				fmt.Fprintln(statsw, strings.Join(cols, ";"))
 
 				if n%1000 == 0 {
-					logger.Infof("%v messages are published", n)
+					fmt.Printf("%v messages are published\n", n)
 				}
 			case <-ctx.Done():
 				return
