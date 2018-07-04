@@ -193,7 +193,6 @@ func main() {
 	go func() {
 		defer statswg.Done()
 
-		start := time.Now()
 		times := make([]time.Duration, 0, config.Messages)
 
 		var n, e int
@@ -204,20 +203,18 @@ func main() {
 				avg = total / time.Duration(n)
 			}
 
-			duration := time.Since(start)
-
 			sort.Slice(times, func(i, j int) bool {
 				return times[i] < times[j]
 			})
 
 			fmt.Println()
 			fmt.Printf("Concurrent level:\t%v\n", config.Concurrency)
-			fmt.Printf("Time taken for tests:\t%v\n", duration)
+			fmt.Printf("Time taken for tests:\t%v\n", total)
 			fmt.Printf("Published messages:\t%v\n", n)
 			fmt.Printf("Failed messages:\t%v\n", e)
 			fmt.Printf("Messages per second:\t%.2f (mean)\n", 1/avg.Seconds())
 			fmt.Printf("Time per message:\t%v (mean)\n", avg)
-			fmt.Printf("Time per message:\t%v (mean, across all concurrent publishers)\n", duration/time.Duration(n))
+			fmt.Printf("Time per message:\t%v (mean, across all concurrent publishers)\n", total/time.Duration(n/config.Concurrency))
 
 			fmt.Println()
 			fmt.Println("Percentage of the messages published within a certain time")
