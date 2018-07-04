@@ -120,6 +120,10 @@ func main() {
 	flag.StringVar(&config.Stats, "stats", "", "CSV filename for statistics")
 	flag.Parse()
 
+	if config.Messages == 0 || config.Concurrency == 0 {
+		return
+	}
+
 	var statsw = ioutil.Discard
 
 	// open stats writer
