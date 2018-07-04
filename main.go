@@ -7,11 +7,9 @@ import (
 	"fmt"
 	"github.com/streadway/amqp"
 	"golang.org/x/sync/errgroup"
-	"io/ioutil"
 	"os"
 	"os/signal"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -107,7 +105,6 @@ func main() {
 		Expiration  int
 		Exchange    string
 		RoutingKey  string
-		Stats       string
 	}
 
 	flag.StringVar(&config.AMQPURL, "amqp-url", "amqp://", "AMQP URL (see https://www.rabbitmq.com/uri-spec.html)")
@@ -117,25 +114,10 @@ func main() {
 	flag.IntVar(&config.Expiration, "exp", 0, "Expiration time for messages (ms)")
 	flag.StringVar(&config.RoutingKey, "routing-key", "messages", "Routing Key")
 	flag.StringVar(&config.Exchange, "exchange", "", "Exchange")
-	flag.StringVar(&config.Stats, "stats", "", "CSV filename for statistics")
 	flag.Parse()
 
 	if config.Messages == 0 || config.Concurrency == 0 {
 		return
-	}
-
-	var statsw = ioutil.Discard
-
-	// open stats writer
-	if config.Stats != "" {
-		f, err := os.Create(config.Stats)
-		if err != nil {
-			panic(err)
-		}
-
-		defer f.Close()
-
-		statsw = f
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -156,7 +138,7 @@ func main() {
 	})
 
 	// publisher
-	messages := make(chan Message)
+	messages := make(chan Message, config.Concurrency)
 	go func() {
 		fmt.Printf("Sending messages (be patient)...\n")
 
@@ -177,7 +159,7 @@ func main() {
 		}
 	}()
 
-	stats := make(chan Stat)
+	stats := make(chan Stat, config.Concurrency)
 
 	// workers
 	workereg, ctx := errgroup.WithContext(ctx)
@@ -195,31 +177,31 @@ func main() {
 
 		times := make([]time.Duration, 0, config.Messages)
 
-		var n, e int
-		var min, max, avg, total time.Duration
+		var published, failures int
+		var total time.Duration
 
 		defer func() {
-			if n != 0 {
-				avg = total / time.Duration(n)
-			}
-
 			sort.Slice(times, func(i, j int) bool {
 				return times[i] < times[j]
 			})
 
 			fmt.Println()
-			fmt.Printf("Concurrent level:\t%v\n", config.Concurrency)
+			fmt.Printf("Concurrency level:\t%v\n", config.Concurrency)
 			fmt.Printf("Time taken for tests:\t%v\n", total)
-			fmt.Printf("Published messages:\t%v\n", n)
-			fmt.Printf("Failed messages:\t%v\n", e)
-			fmt.Printf("Messages per second:\t%.2f (mean)\n", 1/avg.Seconds())
-			fmt.Printf("Time per message:\t%v (mean)\n", avg)
-			fmt.Printf("Time per message:\t%v (mean, across all concurrent publishers)\n", total/time.Duration(n/config.Concurrency))
+			fmt.Printf("Published messages:\t%v\n", published)
+			fmt.Printf("Failed messages:\t%v\n", failures)
 
-			fmt.Println()
-			fmt.Println("Percentage of the messages published within a certain time")
-			for _, p := range percentiles {
-				fmt.Printf("    %d%% \t%v\n", int(p*100), times[int(float32(len(times)-1)*p)])
+			if published != 0 {
+				avg := total / time.Duration(published)
+				fmt.Printf("Messages per second:\t%.2f (mean)\n", 1/avg.Seconds())
+				fmt.Printf("Time per message:\t%v (mean)\n", avg)
+				fmt.Printf("Time per message:\t%v (mean, across all concurrent publishers)\n", total/time.Duration(published*config.Concurrency))
+
+				fmt.Println()
+				fmt.Println("Percentage of the messages published within a certain time")
+				for _, p := range percentiles {
+					fmt.Printf("    %d%% \t%v\n", int(p*100), times[int(float32(len(times)-1)*p)])
+				}
 			}
 		}()
 
@@ -231,42 +213,15 @@ func main() {
 				}
 
 				if s.Error == nil {
-					n++
-
+					published++
 					total += s.Duration
-
-					if s.Duration > max {
-						max = s.Duration
-					}
-
-					if s.Duration < min || min == 0 {
-						min = s.Duration
-					}
-
 					times = append(times, s.Duration)
 				} else {
-					e++
+					failures++
 				}
 
-				errstr := ""
-				if s.Error != nil {
-					errstr = s.Error.Error()
-				}
-
-				cols := []string{
-					fmt.Sprint(s.Message.Index),
-					s.Message.Exchange,
-					s.Message.RoutingKey,
-					fmt.Sprint(s.Message.Size),
-					fmt.Sprint(s.Message.Expiration),
-					fmt.Sprint(int64(s.Duration)),
-					errstr,
-				}
-
-				fmt.Fprintln(statsw, strings.Join(cols, ";"))
-
-				if n%1000 == 0 {
-					fmt.Printf("%v messages are published\n", n)
+				if published%1000 == 0 {
+					fmt.Printf("%v messages are published\n", published)
 				}
 			case <-ctx.Done():
 				return
