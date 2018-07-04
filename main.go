@@ -1,18 +1,18 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"flag"
-	"os"
+	"fmt"
 	"github.com/skolodyazhnyy/amqp-cgi-bridge/log"
 	"github.com/streadway/amqp"
-	"context"
-	"os/signal"
-	"bytes"
-	"time"
 	"golang.org/x/sync/errgroup"
-	"fmt"
 	"io/ioutil"
+	"os"
+	"os/signal"
 	"strings"
+	"time"
 )
 
 type Message struct {
@@ -226,7 +226,7 @@ func main() {
 
 				fmt.Fprintln(statsw, strings.Join(cols, ";"))
 
-				if n % 1000 == 0 {
+				if n%1000 == 0 {
 					logger.Infof("%v messages are published", n)
 				}
 			case <-ctx.Done():
@@ -237,6 +237,6 @@ func main() {
 
 	// wait for workers to finish
 	eg.Wait()
-	
+
 	close(stats)
 }
