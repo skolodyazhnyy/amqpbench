@@ -205,14 +205,14 @@ func main() {
 			fmt.Println()
 			fmt.Printf("Concurrent level:\t%v\n", config.Concurrency)
 			fmt.Printf("Time taken for tests:\t%v\n", duration)
-			fmt.Printf("Complete messages:\t%v\n", n)
+			fmt.Printf("Published messages:\t%v\n", n)
 			fmt.Printf("Failed messages:\t%v\n", e)
 			fmt.Printf("Messages per second:\t%.2f (mean)\n", 1/avg.Seconds())
 			fmt.Printf("Time per message:\t%v (mean)\n", avg)
 			fmt.Printf("Time per message:\t%v (mean, across all concurrent publishers)\n", duration/time.Duration(n))
 
 			fmt.Println()
-			fmt.Println("Percentage of the messages published within a certain time (ms)")
+			fmt.Println("Percentage of the messages published within a certain time")
 			for _, p := range percentiles {
 				fmt.Printf("    %d%% \t%v\n", int(p*100), times[int(float32(len(times)-1)*p)])
 			}
