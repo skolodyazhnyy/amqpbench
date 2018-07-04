@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -158,33 +159,36 @@ func main() {
 		defer close(messages)
 
 		for i := 0; i < config.Messages; i++ {
-			m := Message{
+			select {
+			case <-ctx.Done():
+				return
+			case messages <- Message{
 				Index:      i,
 				Exchange:   config.Exchange,
 				RoutingKey: config.RoutingKey,
 				Size:       config.Size,
 				Expiration: config.Expiration,
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case messages <- m:
+			}:
 			}
 		}
 	}()
 
-	// workers
 	stats := make(chan Stat)
-	eg, ctx := errgroup.WithContext(ctx)
+
+	// workers
+	workereg, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < config.Concurrency; i++ {
-		eg.Go(func() error {
+		workereg.Go(func() error {
 			return worker(ctx, conn, messages, stats)
 		})
 	}
 
 	// stats
+	statswg := sync.WaitGroup{}
+	statswg.Add(1)
 	go func() {
+		defer statswg.Done()
+
 		start := time.Now()
 		times := make([]time.Duration, 0, config.Messages)
 
@@ -269,8 +273,7 @@ func main() {
 		}
 	}()
 
-	// wait for workers to finish
-	eg.Wait()
-
+	workereg.Wait()
 	close(stats)
+	statswg.Wait()
 }
