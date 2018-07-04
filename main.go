@@ -116,7 +116,7 @@ func main() {
 	flag.IntVar(&config.Expiration, "exp", 0, "Expiration time for messages (ms)")
 	flag.StringVar(&config.RoutingKey, "routing-key", "messages", "Routing Key")
 	flag.StringVar(&config.Exchange, "exchange", "", "Exchange")
-	flag.StringVar(&config.Stats, "stats", "stats.csv", "File path to save all stats")
+	flag.StringVar(&config.Stats, "stats", "", "CSV filename for statistics")
 	flag.Parse()
 
 	var statsw = ioutil.Discard
