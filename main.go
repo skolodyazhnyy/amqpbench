@@ -23,6 +23,8 @@ var percentiles = []float32{
 	0.95,
 	0.98,
 	0.99,
+	0.999,
+	0.9999,
 	1,
 }
 
@@ -201,7 +203,7 @@ func main() {
 				fmt.Println()
 				fmt.Println("Percentage of the messages published within a certain time")
 				for _, p := range percentiles {
-					fmt.Printf("    %d%% \t%v\n", int(p*100), times[int(float32(len(times)-1)*p)])
+					fmt.Printf("    %.2f%% \t%v\n", p*100, times[int(float32(len(times)-1)*p)])
 				}
 			}
 		}()
