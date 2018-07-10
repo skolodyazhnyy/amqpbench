@@ -66,10 +66,15 @@ func worker(ctx context.Context, conn *amqp.Connection, in <-chan Message, out c
 
 			start := time.Now()
 
-			err := ch.Publish(m.Exchange, m.RoutingKey, false, false, amqp.Publishing{
-				Expiration: fmt.Sprint(m.Expiration),
-				Body:       bytes.Repeat([]byte("x"), m.Size),
-			})
+			p := amqp.Publishing{
+				Body: bytes.Repeat([]byte("x"), m.Size),
+			}
+
+			if m.Expiration != 0 {
+				p.Expiration = fmt.Sprint(m.Expiration)
+			}
+
+			err := ch.Publish(m.Exchange, m.RoutingKey, false, false, p)
 
 			d := time.Since(start)
 
